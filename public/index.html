@@ -11,6 +11,14 @@
 <body>
     <main>
         <header>
+            <button
+                id="theme-toggle"
+                type="button"
+                aria-label="Switch to dark mode"
+                aria-pressed="false"
+                title="Switch theme"
+            >☾</button>
+
             <p>Electronics Workshop</p>
             <h1>Student Project Tracker</h1>
             <p class="student-info">Pranjal Sarnad</p>
@@ -57,7 +65,9 @@
         <section aria-labelledby="list-title">
             <h2 id="list-title">My projects</h2>
 
-            <p id="empty-state">No projects yet. Add your first idea.</p>
+            <p id="empty-state">
+                No projects yet. Add your first idea.
+            </p>
 
             <ul id="project-list"></ul>
         </section>

@@ -1,4 +1,6 @@
 
+const themeToggle = document.querySelector('#theme-toggle');
+
 const form = document.querySelector('#project-form');
 const nameInput = document.querySelector('#name');
 const statusInput = document.querySelector('#status');
@@ -8,13 +10,99 @@ const saveButton = document.querySelector('#save-button');
 const cancelButton = document.querySelector('#cancel-button');
 const message = document.querySelector('#message');
 
-// The API is the source of truth for all projects.
 let projects = [];
 let editingId = null;
-let busy = false;
+let isBusy = false;
 
-function showMessage(text) {
+// ------------------------------
+// Light and dark mode
+// ------------------------------
+
+function applyTheme(theme) {
+    const isDark = theme === 'dark';
+
+    document.body.dataset.theme = isDark ? 'dark' : 'light';
+
+    themeToggle.textContent = isDark ? '☀' : '☾';
+
+    themeToggle.setAttribute(
+        'aria-label',
+        isDark ? 'Switch to light mode' : 'Switch to dark mode'
+    );
+
+    themeToggle.setAttribute('aria-pressed', String(isDark));
+    themeToggle.title = isDark
+        ? 'Switch to light mode'
+        : 'Switch to dark mode';
+}
+
+let savedTheme = 'light';
+
+try {
+    savedTheme =
+        localStorage.getItem('student-project-tracker-theme') || 'light';
+} catch {
+    // Keep light mode if browser storage is unavailable.
+}
+
+applyTheme(savedTheme === 'dark' ? 'dark' : 'light');
+
+themeToggle.addEventListener('click', () => {
+    const nextTheme =
+        document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+
+    applyTheme(nextTheme);
+
+    try {
+        localStorage.setItem('student-project-tracker-theme', nextTheme);
+    } catch {
+        // The toggle still works if browser storage is unavailable.
+    }
+});
+
+// ------------------------------
+// Project tracker
+// ------------------------------
+
+function setMessage(text) {
     message.textContent = text;
+}
+
+function setBusy(busy) {
+    isBusy = busy;
+    saveButton.disabled = busy;
+    cancelButton.disabled = busy;
+    nameInput.disabled = busy;
+    statusInput.disabled = busy;
+
+    projectList.querySelectorAll('button').forEach((button) => {
+        button.disabled = busy;
+    });
+}
+
+async function apiRequest(url, options = {}) {
+    const response = await fetch(url, {
+        ...options,
+        headers: {
+            'Content-Type': 'application/json',
+            ...options.headers
+        }
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    let data = null;
+
+    if (contentType.includes('application/json')) {
+        data = await response.json();
+    }
+
+    if (!response.ok) {
+        throw new Error(
+            data?.error || `Request failed (${response.status}).`
+        );
+    }
+
+    return data;
 }
 
 function resetForm() {
@@ -24,61 +112,23 @@ function resetForm() {
     cancelButton.hidden = true;
 }
 
-function setBusy(value) {
-    busy = value;
-    saveButton.disabled = busy;
-    cancelButton.disabled = busy;
-
-    projectList.querySelectorAll('button').forEach(button => {
-        button.disabled = busy;
-    });
-}
-
-async function readResponse(response) {
-    let data;
-
-    try {
-        data = await response.json();
-    } catch {
-        throw new Error(
-            response.ok
-                ? 'The server returned an unreadable response.'
-                : `Request failed with HTTP ${response.status}.`
-        );
-    }
-
-    if (!response.ok) {
-        throw new Error(
-            typeof data?.error === 'string'
-                ? data.error
-                : `Request failed with HTTP ${response.status}.`
-        );
-    }
-
-    return data;
-}
-
-function showRequestError(error) {
-    if (error instanceof TypeError) {
-        showMessage(
-            'Could not connect to the server. Check that the server is running and try again.'
-        );
-    } else {
-        showMessage(error.message || 'Something went wrong. Please try again.');
-    }
-}
-
 function renderProjects() {
     projectList.replaceChildren();
+    emptyState.hidden = projects.length > 0;
 
-    projects.forEach(project => {
-        const listItem = document.createElement('li');
+    projects.forEach((project) => {
+        const item = document.createElement('li');
 
-        const projectName = document.createElement('h3');
+        const details = document.createElement('div');
+        details.className = 'project-details';
+
+        const projectName = document.createElement('strong');
         projectName.textContent = project.name;
 
-        const projectStatus = document.createElement('p');
+        const projectStatus = document.createElement('span');
         projectStatus.textContent = `Status: ${project.status}`;
+
+        details.append(projectName, projectStatus);
 
         const actions = document.createElement('div');
         actions.className = 'project-actions';
@@ -86,191 +136,141 @@ function renderProjects() {
         const editButton = document.createElement('button');
         editButton.type = 'button';
         editButton.textContent = 'Edit';
-        editButton.disabled = busy;
-
         editButton.addEventListener('click', () => {
-            if (busy) return;
-
-            editingId = project.id;
-            nameInput.value = project.name;
-            statusInput.value = project.status;
-            saveButton.textContent = 'Save changes';
-            cancelButton.hidden = false;
-            showMessage('Editing project.');
-            nameInput.focus();
+            startEditing(project);
         });
 
         const deleteButton = document.createElement('button');
         deleteButton.type = 'button';
         deleteButton.textContent = 'Delete';
-        deleteButton.disabled = busy;
-
-        deleteButton.addEventListener('click', async () => {
-            if (busy) return;
-
-            const confirmed = window.confirm(
-                `Are you sure you want to delete "${project.name}"?`
-            );
-
-            if (!confirmed) return;
-
-            setBusy(true);
-            showMessage('Deleting project...');
-
-            try {
-                await readResponse(await fetch(
-                    `/api/projects/${encodeURIComponent(project.id)}`,
-                    { method: 'DELETE' }
-                ));
-
-                if (editingId === project.id) {
-                    resetForm();
-                }
-
-                await loadProjects();
-                showMessage('Project deleted successfully.');
-            } catch (error) {
-                showRequestError(error);
-            } finally {
-                setBusy(false);
-                renderProjects();
-            }
+        deleteButton.className = 'delete-button';
+        deleteButton.addEventListener('click', () => {
+            deleteProject(project.id, project.name);
         });
 
         actions.append(editButton, deleteButton);
-        listItem.append(projectName, projectStatus, actions);
-        projectList.appendChild(listItem);
+        item.append(details, actions);
+        projectList.append(item);
     });
 
-    // Only show the empty state after a successful API load.
-    emptyState.hidden = projects.length > 0;
+    if (isBusy) {
+        projectList.querySelectorAll('button').forEach((button) => {
+            button.disabled = true;
+        });
+    }
 }
 
 async function loadProjects() {
-    const response = await fetch('/api/projects');
-    const data = await readResponse(response);
+    try {
+        setMessage('Loading projects...');
 
-    if (!Array.isArray(data)) {
-        throw new Error('The server returned an invalid project list.');
+        const data = await apiRequest('/api/projects');
+
+        projects = Array.isArray(data) ? data : data.projects;
+
+        if (!Array.isArray(projects)) {
+            projects = [];
+        }
+
+        renderProjects();
+        setMessage('');
+    } catch (error) {
+        setMessage(`Could not load projects: ${error.message}`);
     }
-
-    const validProjects = data.every(project =>
-        project !== null &&
-        typeof project === 'object' &&
-        Number.isSafeInteger(project.id) &&
-        project.id > 0 &&
-        typeof project.name === 'string' &&
-        project.name.trim() !== '' &&
-        typeof project.status === 'string'
-    );
-
-    if (!validProjects) {
-        throw new Error('The server returned invalid project data.');
-    }
-
-    projects = data;
-
-    // If the project being edited no longer exists, leave edit mode.
-    if (
-        editingId !== null &&
-        !projects.some(project => project.id === editingId)
-    ) {
-        resetForm();
-    }
-
-    renderProjects();
 }
 
-form.addEventListener('submit', async event => {
+function startEditing(project) {
+    if (isBusy) return;
+
+    editingId = project.id;
+    nameInput.value = project.name;
+    statusInput.value = project.status;
+
+    saveButton.textContent = 'Save changes';
+    cancelButton.hidden = false;
+
+    setMessage('Editing project.');
+    nameInput.focus();
+}
+
+cancelButton.addEventListener('click', () => {
+    if (isBusy) return;
+
+    resetForm();
+    setMessage('');
+});
+
+form.addEventListener('submit', async (event) => {
     event.preventDefault();
 
-    if (busy) return;
+    if (isBusy) return;
 
     const name = nameInput.value.trim();
     const status = statusInput.value;
 
-    if (name === '') {
+    if (!name) {
+        setMessage('Please enter a project name.');
         nameInput.focus();
-        showMessage('Please enter a project name.');
         return;
     }
 
     const isEditing = editingId !== null;
-    const projectId = editingId;
+    const url = isEditing
+        ? `/api/projects/${encodeURIComponent(editingId)}`
+        : '/api/projects';
 
-    const projectData = { name, status };
+    const method = isEditing ? 'PUT' : 'POST';
 
     setBusy(true);
-    showMessage(isEditing ? 'Saving changes...' : 'Saving project...');
+    setMessage(isEditing ? 'Saving changes...' : 'Adding project...');
 
     try {
-        const response = await fetch(
-            isEditing
-                ? `/api/projects/${encodeURIComponent(projectId)}`
-                : '/api/projects',
-            {
-                method: isEditing ? 'PUT' : 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(projectData)
-            }
-        );
+        await apiRequest(url, {
+            method,
+            body: JSON.stringify({ name, status })
+        });
 
-        await readResponse(response);
-
-        // The mutation succeeded. Clear the form only now.
         resetForm();
+        await loadProjects();
 
-        try {
-            await loadProjects();
-            showMessage(
-                isEditing
-                    ? 'Project updated successfully.'
-                    : 'Project added successfully.'
-            );
-        } catch (error) {
-            showMessage(
-                `The change was saved, but the project list could not be refreshed. ${error.message}`
-            );
-        }
-
-        nameInput.focus();
+        setMessage(isEditing ? 'Project updated.' : 'Project added.');
     } catch (error) {
-        // Keep the entered values and Edit mode if the mutation failed.
-        showRequestError(error);
+        setMessage(`Could not save project: ${error.message}`);
     } finally {
         setBusy(false);
         renderProjects();
     }
 });
 
-cancelButton.addEventListener('click', () => {
-    if (busy) return;
+async function deleteProject(id, name) {
+    if (isBusy) return;
 
-    resetForm();
-    showMessage('Edit cancelled.');
-    nameInput.focus();
-});
+    const confirmed = window.confirm(
+        `Are you sure you want to delete "${name}"?`
+    );
 
-// Load the API collection when the page opens.
-async function startApp() {
-    emptyState.hidden = true;
-    showMessage('Loading projects...');
+    if (!confirmed) return;
+
+    setBusy(true);
+    setMessage('Deleting project...');
 
     try {
+        await apiRequest(`/api/projects/${encodeURIComponent(id)}`, {
+            method: 'DELETE'
+        });
+
+        if (editingId === id) {
+            resetForm();
+        }
+
         await loadProjects();
-        showMessage(
-            projects.length === 0
-                ? 'No projects found.'
-                : 'Projects loaded successfully.'
-        );
+        setMessage('Project deleted.');
     } catch (error) {
-        projects = [];
-        projectList.replaceChildren();
-        emptyState.hidden = true;
-        showRequestError(error);
+        setMessage(`Could not delete project: ${error.message}`);
+    } finally {
+        setBusy(false);
+        renderProjects();
     }
 }
 
-startApp();
+loadProjects();
